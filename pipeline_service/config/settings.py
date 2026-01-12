@@ -3,8 +3,18 @@ from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from pydantic import BaseModel
 
 config_dir = Path(__file__).parent
+
+class BackgroundRemovalConfig(BaseModel):
+    """Background removal configuration"""
+    model_id: str = "PramaLLC/BEN2"
+    input_image_size: tuple[int, int] = (1024, 1024)
+    output_image_size: tuple[int, int] = (518, 518)
+    padding_percentage: float = 0.2
+    limit_padding: bool = True
+    gpu: int = 0
 
 class Settings(BaseSettings):
     api_title: str = "3D Generation pipeline Service"
@@ -38,48 +48,18 @@ class Settings(BaseSettings):
     # Qwen Edit settings
     qwen_edit_base_model_path: str = Field(default="Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",env="QWEN_EDIT_BASE_MODEL_PATH")
     qwen_edit_model_path: str = Field(default="Qwen/Qwen-Image-Edit-2511",env="QWEN_EDIT_MODEL_PATH")
-    qwen_edit_lora_repo: str = Field(default="lightx2v/Qwen-Image-Edit-2511-Lightning",env="QWEN_EDIT_LORA_REPO")
     qwen_edit_height: int = Field(default=1024, env="QWEN_EDIT_HEIGHT")
     qwen_edit_width: int = Field(default=1024, env="QWEN_EDIT_WIDTH")
     num_inference_steps: int = Field(default=4, env="NUM_INFERENCE_STEPS")
     true_cfg_scale: float = Field(default=1.0, env="TRUE_CFG_SCALE")
     qwen_edit_prompt_path: Path = Field(default=config_dir.joinpath("qwen_edit_prompt.json"), env="QWEN_EDIT_PROMPT_PATH")
 
-    # Backgorund removal settings
-    background_removal_model_id: str = Field(default="ZhengPeng7/BiRefNet", env="BACKGROUND_REMOVAL_MODEL_ID")
     input_image_size: tuple[int, int] = Field(default=(1024, 1024), env="INPUT_IMAGE_SIZE") # (height, width)
     output_image_size: tuple[int, int] = Field(default=(518, 518), env="OUTPUT_IMAGE_SIZE") # (height, width)
     padding_percentage: float = Field(default=0.2, env="PADDING_PERCENTAGE")
     limit_padding: bool = Field(default=True, env="LIMIT_PADDING")
     
-    vllm_url: str = "http://localhost:8095/v1"
-    vllm_api_key: str = "local"
-    vllm_model_name: str = "THUDM/GLM-4.1V-9B-Thinking"
-    
-    # Maximum number of shape candidates to generate in Stage 1
-    max_candidates: int = Field(default=3, env="MAX_CANDIDATES")
-    
-    # Candidate selection based on voxel count ranges
-    # Format: [(max_voxels, num_candidates), ...]
-    # Reads as: "if voxels <= max_voxels, use num_candidates"
-    candidate_ranges: list[tuple[int, int]] = Field(default=[
-        (25000, 3),    # 0-25k voxels → 3 candidates
-        (50000, 2),    # 25k-40k voxels → 2 candidates
-        (10000, 1),    # 40k-50k voxels → 1 candidate
-        # Above 50k → 1 candidate (uses last value)
-    ], env="CANDIDATE_RANGES")
-    
-    # Adaptive SLAT steps based on voxel count ranges
-    # Format: [(max_voxels, num_steps), ...]
-    # Reads as: "if voxels <= max_voxels, use num_steps"
-    adaptive_step_ranges: list[tuple[int, int]] = Field(default=[
-        (25000, 32),   # 0-25k voxels → 30 steps (more detail for simple shapes)
-        (50000, 22),   # 25k-50k voxels → 20 steps (standard)
-        # Above 50k → 20 steps (uses last value)
-    ], env="ADAPTIVE_STEP_RANGES")
-    
-    # Timeout for generation + judging (seconds)
-    generation_timeout: int = Field(default=25, env="GENERATION_TIMEOUT")
+    background_removal: BackgroundRemovalConfig = Field(default_factory=BackgroundRemovalConfig)
 
     class Config:
         env_file = ".env"
@@ -87,6 +67,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+background_removal = BackgroundRemovalConfig()
 
-__all__ = ["Settings", "settings"]
+__all__ = ["Settings", "settings", "BackgroundRemovalConfig", "background_removal"]
 

@@ -32,6 +32,7 @@ class TrellisRequest:
     images: list[Image.Image]
     seed: int
     params: Optional[TrellisParamsOverrides] = None
+    default: bool = False
 
 
 @dataclass(slots=True)

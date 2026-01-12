@@ -4,8 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torchvision import transforms
+from torchvision.transforms.functional import to_pil_image, resized_crop, to_tensor
 from contextlib import contextmanager
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 
 from .base import Pipeline
 from . import samplers
@@ -92,35 +93,60 @@ class TrellisImageTo3DPipeline(Pipeline):
         )
         self.image_cond_model_transform = transform
 
-    def preprocess_image(self, input: Image.Image) -> Image.Image:
+    def preprocess_image(self, image: Image.Image) -> Image.Image:
         """
         Preprocess the input image.
         """
-        # if has alpha channel, use it directly; otherwise, remove background
-        output_np = np.array(output)
-        alpha = output_np[:, :, 3]
-        bbox = np.argwhere(alpha > 0.8 * 255)
-        bbox = (
-            np.min(bbox[:, 1]),
-            np.min(bbox[:, 0]),
-            np.max(bbox[:, 1]),
-            np.max(bbox[:, 0]),
+        # Goal: always return an RGB image sized for the image conditioning model.
+        # If an alpha channel with transparency is present, crop to the foreground bbox.
+        target_size = (518, 518)
+        # image = image.filter(ImageFilter.GaussianBlur(0.5)) 
+        rgba = image.convert("RGBA")
+        alpha = np.array(rgba)[:, :, 3]
+        has_transparency = not np.all(alpha == 255)
+
+        if has_transparency:
+            ys, xs = np.where(alpha > 0)
+            if ys.size > 0 and xs.size > 0:
+                y_min, y_max = int(ys.min()), int(ys.max())
+                x_min, x_max = int(xs.min()), int(xs.max())
+
+                # Square crop around the bbox with a bit of padding.
+                bbox_w = x_max - x_min + 1
+                bbox_h = y_max - y_min + 1
+                side = max(bbox_w, bbox_h)
+                padding_percentage = float(getattr(self, "padding_percentage", 0.10))
+                side = int(side * (1.0 + padding_percentage))
+
+                cx = (x_min + x_max) / 2.0
+                cy = (y_min + y_max) / 2.0
+                left = int(round(cx - side / 2.0))
+                top = int(round(cy - side / 2.0))
+                right = left + side
+                bottom = top + side
+
+                limit_padding = bool(getattr(self, "limit_padding", True))
+                if limit_padding:
+                    left = max(0, left)
+                    top = max(0, top)
+                    right = min(rgba.width, right)
+                    bottom = min(rgba.height, bottom)
+
+                cropped = rgba.crop((left, top, right, bottom)).convert("RGB")
+                return ImageOps.fit(
+                    cropped,
+                    target_size,
+                    method=Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.5),
+                )
+
+        # No usable transparency mask: do a simple centered square fit.
+        return ImageOps.fit(
+            image.convert("RGB"),
+            target_size,
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
         )
-        center = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-        size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-        size = int(size * 1.2)
-        bbox = (
-            center[0] - size // 2,
-            center[1] - size // 2,
-            center[0] + size // 2,
-            center[1] + size // 2,
-        )
-        output = output.crop(bbox)  # type: ignore
-        output = output.resize((518, 518), Image.Resampling.LANCZOS)
-        output = np.array(output).astype(np.float32) / 255
-        output = output[:, :, :3] * output[:, :, 3:4]
-        output = Image.fromarray((output * 255).astype(np.uint8))
-        return output
 
     @torch.no_grad()
     def encode_image(
@@ -278,8 +304,10 @@ class TrellisImageTo3DPipeline(Pipeline):
             formats (List[str]): The formats to decode the structured latent to.
             preprocess_image (bool): Whether to preprocess the image.
         """
+        index = 0
         if preprocess_image:
             image = self.preprocess_image(image)
+            
         cond = self.get_cond([image])
         torch.manual_seed(seed)
         num_oversamples = max(num_samples, num_oversamples)
@@ -319,7 +347,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         sampler_name: str,
         num_images: int,
         num_steps: int,
-        mode: Literal["stochastic", "multidiffusion"] = "stochastic",
+        mode: Literal["stochastic", "multidiffusion"] = "multidiffusion",
     ):
         """
         Inject a sampler with multiple images as condition.
